@@ -17,9 +17,12 @@
   };
 
   let items: SearchItem[] = [];
+  let enlargedItem: SearchItem | null = null;
   let query = '';
-  let imageMinimumSimilarity = 0.22;
-  let captionMinimumSimilarity = 0.7;
+  let imageMinimumSimilarity = 0.24;
+  let captionMinimumSimilarity = 0.76;
+  let limitResults = false;
+  let resultLimit = 10;
   let errorMessage = '';
   let showRegios = true;
   let showSegmentation = true;
@@ -51,7 +54,12 @@
       const response = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, imageMinimumSimilarity, captionMinimumSimilarity })
+        body: JSON.stringify({
+          query,
+          imageMinimumSimilarity,
+          captionMinimumSimilarity,
+          resultLimit: limitResults ? resultLimit : null
+        })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Search failed.');
@@ -66,13 +74,17 @@
   };
 </script>
 
+<svelte:window
+  on:keydown={(event) => event.key === 'Escape' && (enlargedItem = null)}
+/>
+
 <main class="container mx-auto p-6">
   <div class="grid grid-cols-1 gap-6 lg:h-[calc(100vh-8rem)] lg:grid-cols-5 lg:grid-rows-1">
-    <section class="flex min-h-0 flex-col border-r border-primary-500 p-5 lg:col-span-2">
+    <section class="flex min-h-0 flex-col overflow-y-auto border-r border-primary-500 p-5 lg:col-span-2">
       <h1 class="mb-4 text-2xl font-bold">Search the sample collection</h1>
       <p class="mb-5 text-sm opacity-80">
-        Search 350 linked Pompeii image and caption pairs with OpenCLIP ViT-B/32. A pair appears
-        when its image or caption meets its similarity threshold.
+        Search linked Pompeii image and caption pairs with OpenCLIP. A pair appears when its image
+        or caption meets its similarity threshold.
       </p>
 
       <label class="mb-2 block">
@@ -109,6 +121,23 @@
           />
         </label>
       </div>
+      <label class="mb-4 flex items-center gap-2 text-sm">
+        <input type="checkbox" bind:checked={limitResults} />
+        <span>Limit the number of results</span>
+      </label>
+      {#if limitResults}
+        <label class="mb-4 block text-sm">
+          <span>Maximum results: {resultLimit}</span>
+          <input
+            class="mt-2 block w-full"
+            type="range"
+            min="1"
+            max="50"
+            step="1"
+            bind:value={resultLimit}
+          />
+        </label>
+      {/if}
       <button
         type="button"
         class="variant-filled-secondary btn mb-5 w-full text-white"
@@ -121,14 +150,21 @@
       {#if errorMessage}
         <p class="mb-4 text-red-500">{errorMessage}</p>
       {/if}
-      <div class="min-h-0 flex-1 space-y-5 overflow-y-auto">
+      <div class="space-y-5">
         {#if !itemsLoading && hasSearched && !errorMessage && items.length === 0}
           <p>No image or caption pairs met those thresholds.</p>
         {/if}
         {#each items as item}
           <article id={`result-${item.id}`} class="card variant-ghost-tertiary mx-auto w-[95%] p-4">
             <header class="flex justify-center">
-              <img class="max-h-72 max-w-full object-contain" src={item.imageURL} alt={item.id} />
+              <button
+                type="button"
+                class="cursor-zoom-in border-0 bg-transparent p-0"
+                aria-label={`Enlarge ${itemLabel(item)}`}
+                on:click={() => (enlargedItem = item)}
+              >
+                <img class="max-h-72 max-w-full object-contain" src={item.imageURL} alt={item.id} />
+              </button>
             </header>
             <div class="space-y-3 p-3">
               <h2 class="font-bold">
@@ -182,3 +218,34 @@
     </section>
   </div>
 </main>
+
+{#if enlargedItem}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <button
+      type="button"
+      class="absolute inset-0 cursor-zoom-out bg-black/90"
+      aria-label="Close enlarged image"
+      on:click={() => (enlargedItem = null)}
+    ></button>
+    <section
+      role="dialog"
+      aria-modal="true"
+      aria-label={itemLabel(enlargedItem)}
+      class="relative z-10 flex max-h-full max-w-full flex-col items-center"
+    >
+      <button
+        type="button"
+        class="variant-filled-secondary btn mb-3 self-end text-white"
+        on:click={() => (enlargedItem = null)}
+      >
+        Close
+      </button>
+      <img
+        class="max-h-[85vh] max-w-[94vw] object-contain"
+        src={enlargedItem.imageURL}
+        alt={itemLabel(enlargedItem)}
+      />
+      <p class="mt-3 text-center text-white">{itemLabel(enlargedItem)}</p>
+    </section>
+  </div>
+{/if}
