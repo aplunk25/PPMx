@@ -6,6 +6,8 @@ even when that linked node falls outside the radius.
 """
 
 import argparse
+import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -15,9 +17,11 @@ import torch
 
 
 DEFAULT_EMBEDDINGS_DIR = Path("embeddings/random_samples")
-DEFAULT_CAPTION_RADIUS = 0.30
-DEFAULT_IMAGE_MIN_SIMILARITY = 0.22
+DEFAULT_CAPTION_RADIUS = 0.24
+DEFAULT_IMAGE_MIN_SIMILARITY = 0.24
 CAPTION_DISPLAY_LIMIT = 240
+IMAGE_RANK_WEIGHT = 0.75
+CAPTION_RANK_WEIGHT = 0.25
 
 
 def find_column(frame, candidates, required=True):
@@ -48,7 +52,12 @@ def main():
                         help="Optional CSV output path (interactive mode appends query results)")
     parser.add_argument("--json", action="store_true",
                         help="Print machine-readable results for a single query")
+    parser.add_argument("--server", action="store_true",
+                        help="Keep the model loaded and read newline-delimited JSON requests")
     args = parser.parse_args()
+    if args.server:
+        # Reserve the original stdout stream exclusively for JSON-line replies.
+        sys.stdout = sys.stderr
 
     if not 0 <= args.image_radius <= 2:
         parser.error("--image-radius must be between 0 and 2")
@@ -94,7 +103,7 @@ def main():
     image_vectors = torch.nn.functional.normalize(image_vectors, dim=-1)
     caption_vectors = torch.nn.functional.normalize(caption_vectors, dim=-1)
 
-    def retrieve(query):
+    def retrieve(query, image_radius=args.image_radius, caption_radius=args.caption_radius):
         tokens = tokenizer([query]).to(device)
         with torch.no_grad():
             query_vector = model.encode_text(tokens)
@@ -103,8 +112,8 @@ def main():
             caption_scores = (caption_vectors @ query_vector.T).squeeze(1).cpu().numpy()
 
         # For normalized vectors, cosine distance is 1 - cosine similarity.
-        image_min_similarity = 1.0 - args.image_radius
-        caption_min_similarity = 1.0 - args.caption_radius
+        image_min_similarity = 1.0 - image_radius
+        caption_min_similarity = 1.0 - caption_radius
         image_inside = image_scores >= image_min_similarity
         caption_inside = caption_scores >= caption_min_similarity
         included = image_inside | caption_inside
@@ -114,7 +123,11 @@ def main():
         indices = np.flatnonzero(included)
         indices = sorted(
             indices,
-            key=lambda i: max(float(image_scores[i]), float(caption_scores[i])),
+            key=lambda i: (
+                bool(image_inside[i] and caption_inside[i]),
+                IMAGE_RANK_WEIGHT * float(image_scores[i])
+                + CAPTION_RANK_WEIGHT * float(caption_scores[i]),
+            ),
             reverse=True,
         )
         records = []
@@ -136,8 +149,8 @@ def main():
                     else "image" if image_is_inside else "caption"
                 ),
                 "linked_node_added_outside_radius": image_is_inside != caption_is_inside,
-                "image_cosine_distance_radius": args.image_radius,
-                "caption_cosine_distance_radius": args.caption_radius,
+                "image_cosine_distance_radius": image_radius,
+                "caption_cosine_distance_radius": caption_radius,
                 "image_minimum_similarity": image_min_similarity,
                 "caption_minimum_similarity": caption_min_similarity,
                 "query": query,
@@ -194,6 +207,25 @@ def main():
                   f"(image {row['image_similarity']:.4f}, "
                   f"caption {row['caption_similarity']:.4f}; "
                   f"inside via {row['included_by']})")
+
+    if args.server:
+        # Keep stdout reserved for the worker protocol; model diagnostics go to stderr.
+        protocol_output = sys.__stdout__
+        for line in sys.stdin:
+            request = None
+            try:
+                request = json.loads(line)
+                image_radius = float(request["image_radius"])
+                caption_radius = float(request["caption_radius"])
+                if not 0 <= image_radius <= 2 or not 0 <= caption_radius <= 2:
+                    raise ValueError("Search radii must be between 0 and 2.")
+                results = retrieve(str(request["query"]), image_radius, caption_radius)
+                response = {"id": request["id"], "results": results.to_dict(orient="records")}
+            except Exception as error:
+                response = {"id": request.get("id") if isinstance(request, dict) else None,
+                            "error": str(error)}
+            print(json.dumps(response, ensure_ascii=False), file=protocol_output, flush=True)
+        return
 
     queries = [args.query] if args.query else None
     if queries:
