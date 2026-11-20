@@ -8,9 +8,7 @@
     FillLayer,
     LineLayer,
     Marker,
-    Popup,
-    RasterTileSource,
-    RasterLayer
+    Popup
   } from 'svelte-maplibre';
   import type { ExpressionSpecification, LngLatLike } from 'maplibre-gl';
   import tailwindColors from 'tailwindcss/colors';
@@ -71,14 +69,6 @@
   class="map"
   standardControls
 >
-  <RasterTileSource tiles={['https://palp.art/xyz-tiles/{z}/{x}/{y}.png']} tileSize={256}>
-    <RasterLayer
-      paint={{
-        'raster-opacity': 0.6
-      }}
-    />
-  </RasterTileSource>
-
   {#if showSegmentation}
     <GeoJSON data={segmentationURL}>
       <FillLayer
